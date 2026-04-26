@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from database import engine, SessionLocal
@@ -8,6 +9,14 @@ from llm_service import ask_bess_question_stream
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="BESS Grid Manager API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Dependency to get a DB session
 def get_db():
