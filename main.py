@@ -48,14 +48,19 @@ def ask_llm(question: str):
 
 @app.get("/batteries/summary")
 def get_battery_summary(db: Session = Depends(get_db)):
-    count, total_capacity, total_discharge = db.query(
+    rows = db.query(
+        Battery.is_active,
         func.count(Battery.id),
         func.sum(Battery.capacity_kwh),
         func.sum(Battery.max_discharge_rate_kw)
-    ).filter(Battery.is_active == True).one()
-    
-    return {
-        "active_battery_count": count,
-        "total_capacity_kwh": total_capacity,
-        "total_max_discharge_rate_kw": total_discharge
-    }
+    ).group_by(Battery.is_active).all()
+
+    return [
+        {
+            "is_active": row[0],
+            "battery_count": row[1],
+            "total_capacity_kwh": row[2],
+            "total_max_discharge_rate_kw": row[3]
+        }
+        for row in rows
+    ]
