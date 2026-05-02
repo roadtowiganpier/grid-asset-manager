@@ -11,28 +11,35 @@ class AssetType(PyEnum):
     SOLAR = "solar"
     WIND = "wind"
 
-class DischargeType(PyEnum):
-    DISCHARGE = "discharge"
-    CHARGE = "charge"
-    CURTAIL = "curtail"
-    HOLD = "hold"      
+class GridConnectionStatus(PyEnum):
+    ACTIVE   = "active"      # Operating normally — direction read from power_mw sign
+    CURTAILED = "curtailed"  # Output restricted by grid operator instruction
+    HOLDING  = "holding"     # Standing by — reserved for frequency response
+    FAULT    = "fault"       # Asset is in a fault state
+  
+
+class AssetStatus(PyEnum):
+    COMMUNICATING = "communicating"
+    UNREACHABLE = "unreachable"
+
 
 class Asset(Base):
     __tablename__ = "assets"
 
     id = Column(Integer, primary_key=True, index=True)
     asset_type = Column(Enum(AssetType), nullable=False)
+    eic_code = Column(String(16), nullable=True, unique=True)  # ENTSO-E EIC, always 16 chars
     name = Column(String(100), nullable=False)
-    capacity_mwh = Column(Float, nullable=False)
     max_charge_rate_mw = Column(Float, nullable=False)
     max_discharge_rate_mw = Column(Float, nullable=False)
+    reactive_power_capacity_mvar = Column(Float, nullable=True)   # Nameplate MVAR rating
+    max_capacity_mwh = Column(Float, nullable=False) 
     efficiency = Column(Float, default=0.95)
-    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-    discharge_charge = Column(Enum(DischargeType), nullable=True)
-
+    
     state_of_charge_records = relationship("StateOfCharge", back_populates="asset")
+    dispatch_commands       = relationship("DispatchCommand", back_populates="asset")
 
 
 class StateOfCharge(Base):
@@ -40,14 +47,19 @@ class StateOfCharge(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
-    soc_percent = Column(Float, nullable=False)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    operational_mode =Column(Enum(GridConnectionStatus), nullable=True)
+    asset_status = Column(Enum(AssetStatus), nullable=True)
+    energy_mwh = Column(Float, nullable=False)  # Actual stored energy in MWh
     voltage = Column(Float, nullable=True)
     current_amps = Column(Float, nullable=True)
     temperature_celsius = Column(Float, nullable=True)
     power_mw = Column(Float, nullable=True)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    reactive_power_mvar = Column(Float, nullable=True)   # +ve inductive, -ve capacitive
+    power_factor = Column(Float, nullable=True)    # cos(φ), range -1.0 to 1.0
 
     asset = relationship("Asset", back_populates="state_of_charge_records")
+
 
 class GridSignal(Base):
     __tablename__ = "grid_signals"
@@ -75,14 +87,5 @@ class DispatchCommand (Base):
     power_target_mw = Column(Float, nullable=False)
     duration_seconds = Column(Integer, nullable=False)
     status = Column(String(20), nullable=False, default="pending")
+    asset  = relationship("Asset", back_populates="dispatch_commands")
 
-
-class AssetTelemetry (Base):
-    __tablename__ = "asset_telemetry"
-
-    id = Column(Integer, primary_key=True, index=True)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
-    state_of_charge_percent = Column(Float, nullable=True) 
-    current_power_mw = Column(Float, nullable=False)  
-    status = Column(String(50), nullable=False)
