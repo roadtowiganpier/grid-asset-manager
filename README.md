@@ -507,6 +507,15 @@ flowchart LR
     C --> D["4. Open Swagger\nlocalhost:8000/docs"]
 ```
 
+## 11. Front End Application
+
+
+The frontend for this project is developed by [@Candyfair](https://github.com/Candyfair) and lives in a separate repository:
+
+**[Candyfair/grid-asset-manager-frontend](https://github.com/Candyfair/grid-asset-manager-frontend)**
+
+
+
 ---
 
 *BESS Grid Manager · FastAPI · SQLAlchemy · SQLite · Mistral · Ollama · Python*
