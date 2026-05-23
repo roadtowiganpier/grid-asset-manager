@@ -28,7 +28,7 @@ class Asset(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     asset_type = Column(Enum(AssetType), nullable=False)
-    eic_code = Column(String(16), nullable=True, unique=True)  # ENTSO-E EIC, always 16 chars
+    eic_code = Column(String(20), nullable=True, unique=True)  # ENTSO-E EIC code
     name = Column(String(100), nullable=False)
     max_charge_rate_mw = Column(Float, nullable=False)
     max_discharge_rate_mw = Column(Float, nullable=False)
@@ -44,22 +44,19 @@ class Asset(Base):
 
 class StateOfCharge(Base):
     __tablename__ = "state_of_charge"
-
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime(timezone=True), primary_key=True, default=lambda: datetime.now(timezone.utc), index=True)
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    operational_mode =Column(Enum(GridConnectionStatus), nullable=True)
+    operational_mode = Column(Enum(GridConnectionStatus), nullable=True)
     asset_status = Column(Enum(AssetStatus), nullable=True)
-    energy_mwh = Column(Float, nullable=False)  # Actual stored energy in MWh
+    energy_mwh = Column(Float, nullable=False)
     voltage = Column(Float, nullable=True)
     current_amps = Column(Float, nullable=True)
     temperature_celsius = Column(Float, nullable=True)
     power_mw = Column(Float, nullable=True)
-    reactive_power_mvar = Column(Float, nullable=True)   # +ve inductive, -ve capacitive
-    power_factor = Column(Float, nullable=True)    # cos(φ), range -1.0 to 1.0
-
+    reactive_power_mvar = Column(Float, nullable=True)
+    power_factor = Column(Float, nullable=True)
     asset = relationship("Asset", back_populates="state_of_charge_records")
-
 
 class GridSignal(Base):
     __tablename__ = "grid_signals"

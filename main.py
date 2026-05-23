@@ -2,9 +2,10 @@ from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
+from math import ceil
 from database import engine, SessionLocal
 from models import Base, Asset, AssetType, StateOfCharge
 from llm_service import ask_grid_question_stream
@@ -39,7 +40,7 @@ def health_check():
 
 @app.get("/assetslist")
 def get_assets(db: Session = Depends(get_db)):
-    
+
     # Subquery — most recent state_of_charge timestamp per asset
     latest_soc = (
         db.query(
@@ -56,34 +57,32 @@ def get_assets(db: Session = Depends(get_db)):
         .join(latest_soc, Asset.id == latest_soc.c.asset_id)
         .join(StateOfCharge, (StateOfCharge.asset_id == Asset.id) &
                              (StateOfCharge.timestamp == latest_soc.c.latest_ts))
-        #.filter(Asset.asset_type == AssetType.BATTERY)
         .all()
     )
 
     return [
         {
-            "id":                   asset.id,
-            "asset_type":            asset.asset_type,
-            "eic_code":             asset.eic_code,
-            "name":                 asset.name,
-            "max_capacity_mwh":     asset.max_capacity_mwh,
-            "max_charge_rate_mw":   asset.max_charge_rate_mw,
-            "max_discharge_rate_mw": asset.max_discharge_rate_mw,
+            "id":                           asset.id,
+            "asset_type":                   asset.asset_type,
+            "eic_code":                     asset.eic_code,
+            "name":                         asset.name,
+            "max_capacity_mwh":             asset.max_capacity_mwh,
+            "max_charge_rate_mw":           asset.max_charge_rate_mw,
+            "max_discharge_rate_mw":        asset.max_discharge_rate_mw,
             "reactive_power_capacity_mvar": asset.reactive_power_capacity_mvar,
-            "efficiency":           asset.efficiency,
+            "efficiency":                   asset.efficiency,
             # Live data from latest StateOfCharge
-            "soc_id":               soc.id,
-            "operational_mode":     soc.operational_mode.value if soc.operational_mode else None,
-            "asset_status":         soc.asset_status.value if soc.asset_status else None,
-            "energy_mwh":           soc.energy_mwh,
-            "power_mw":             soc.power_mw,
-            "reactive_power_mvar":  soc.reactive_power_mvar,
-            "power_factor":         soc.power_factor,
-            "last_updated":         soc.timestamp.isoformat(),
+            "soc_id":                       soc.id,
+            "operational_mode":             soc.operational_mode.value if soc.operational_mode else None,
+            "asset_status":                 soc.asset_status.value if soc.asset_status else None,
+            "energy_mwh":                   soc.energy_mwh,
+            "power_mw":                     soc.power_mw,
+            "reactive_power_mvar":          soc.reactive_power_mvar,
+            "power_factor":                 soc.power_factor,
+            "last_updated":                 soc.timestamp.isoformat(),
         }
         for asset, soc in results
     ]
-
 
 
 @app.get("/assets/summary")
@@ -109,9 +108,9 @@ def get_asset_summary(db: Session = Depends(get_db)):
     )
 
     # Aggregate in Python across the latest rows
-    total_power_mw        = sum(soc.power_mw or 0.0 for _, soc in results)
-    total_energy_mwh      = sum(soc.energy_mwh or 0.0 for _, soc in results)
-    total_reactive_mvar   = sum(soc.reactive_power_mvar or 0.0 for _, soc in results)
+    total_power_mw      = sum(soc.power_mw or 0.0 for _, soc in results)
+    total_energy_mwh    = sum(soc.energy_mwh or 0.0 for _, soc in results)
+    total_reactive_mvar = sum(soc.reactive_power_mvar or 0.0 for _, soc in results)
 
     # Break down by asset type
     by_type = {}
@@ -145,8 +144,6 @@ def get_asset_summary(db: Session = Depends(get_db)):
     }
 
 
-from typing import Optional
-
 @app.get("/assets/{asset_id}/soc")
 def get_asset_soc(
     asset_id: int,
@@ -158,6 +155,7 @@ def get_asset_soc(
 ):
     # Verify asset exists
     asset = db.query(Asset).filter(Asset.id == asset_id).first()
+
     if not asset:
         raise HTTPException(status_code=404, detail=f"Asset {asset_id} not found")
 
@@ -192,61 +190,119 @@ def get_asset_soc(
         }
 
     elif mode.upper() == "D":
-        query = (
-            db.query(StateOfCharge)
-            .filter(StateOfCharge.asset_id == asset_id)
-        )
+        # Default to last 2 days if no dates provided
+        if not from_ts:
+            from_dt = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
+        else:
+            from_dt = datetime.fromisoformat(from_ts)
 
-        if from_ts:
-            try:
-                query = query.filter(StateOfCharge.timestamp >= datetime.fromisoformat(from_ts))
-            except ValueError:
-                raise HTTPException(status_code=400, detail="from_ts is not a valid ISO datetime")
+        if not to_ts:
+            to_dt = datetime.utcnow()
+        else:
+            to_dt = datetime.fromisoformat(to_ts)
 
-        if to_ts:
-            try:
-                query = query.filter(StateOfCharge.timestamp <= datetime.fromisoformat(to_ts))
-            except ValueError:
-                raise HTTPException(status_code=400, detail="to_ts is not a valid ISO datetime")
+        delta_days = (to_dt - from_dt).days
+        bucket_minutes = ceil((delta_days * 24 * 60) / limit)
 
-        records = (
-            query
-            .order_by(StateOfCharge.timestamp.asc())
-            .limit(limit)
-            .all()
-        )
+        if delta_days <= 2:
+            records = (
+                db.query(StateOfCharge)
+                .filter(StateOfCharge.asset_id == asset_id)
+                .filter(StateOfCharge.timestamp >= from_dt)
+                .filter(StateOfCharge.timestamp <= to_dt)
+                .order_by(StateOfCharge.timestamp.asc())
+                .limit(limit)
+                .all()
+            )
 
-        if not records:
-            raise HTTPException(status_code=404, detail=f"No state of charge records found for asset {asset_id}")
+            if not records:
+                raise HTTPException(status_code=404, detail=f"No state of charge records found for asset {asset_id}")
 
-        return {
-            "asset_id":         asset.id,
-            "asset_name":       asset.name,
-            "eic_code":         asset.eic_code,
-            "asset_type":       asset.asset_type.value,
-            "max_capacity_mwh": asset.max_capacity_mwh,
-            "record_count":     len(records),
-            "from_ts":          records[0].timestamp.isoformat(),
-            "to_ts":            records[-1].timestamp.isoformat(),
-            "records": [
-                {
-                    "timestamp":           r.timestamp.isoformat(),
-                    "operational_mode":    r.operational_mode.value if r.operational_mode else None,
-                    "asset_status":        r.asset_status.value if r.asset_status else None,
-                    "energy_mwh":          r.energy_mwh,
-                    "power_mw":            r.power_mw,
-                    "reactive_power_mvar": r.reactive_power_mvar,
-                    "power_factor":        r.power_factor,
-                    "voltage":             r.voltage,
-                    "current_amps":        r.current_amps,
-                    "temperature_celsius": r.temperature_celsius,
-                }
-                for r in records
-            ]
-        }
+            return {
+                "asset_id":           asset.id,
+                "asset_name":         asset.name,
+                "eic_code":           asset.eic_code,
+                "asset_type":         asset.asset_type.value,
+                "max_capacity_mwh":   asset.max_capacity_mwh,
+                "record_count":       len(records),
+                "resolution_minutes": 10,
+                "downsampled":        False,
+                "from_ts":            records[0].timestamp.isoformat(),
+                "to_ts":              records[-1].timestamp.isoformat(),
+                "records": [
+                    {
+                        "timestamp":           r.timestamp.isoformat(),
+                        "operational_mode":    r.operational_mode.value if r.operational_mode else None,
+                        "asset_status":        r.asset_status.value if r.asset_status else None,
+                        "energy_mwh":          r.energy_mwh,
+                        "power_mw":            r.power_mw,
+                        "reactive_power_mvar": r.reactive_power_mvar,
+                        "power_factor":        r.power_factor,
+                        "voltage":             r.voltage,
+                        "current_amps":        r.current_amps,
+                        "temperature_celsius": r.temperature_celsius,
+                    }
+                    for r in records
+                ]
+            }
+
+        else:
+            sql = text("""
+                SELECT
+                    time_bucket(:bucket, timestamp) AS bucket,
+                    AVG(energy_mwh)          AS energy_mwh,
+                    AVG(power_mw)            AS power_mw,
+                    AVG(reactive_power_mvar) AS reactive_power_mvar,
+                    AVG(power_factor)        AS power_factor,
+                    AVG(voltage)             AS voltage,
+                    AVG(current_amps)        AS current_amps,
+                    AVG(temperature_celsius) AS temperature_celsius
+                FROM state_of_charge
+                WHERE asset_id = :asset_id
+                AND timestamp BETWEEN :from_dt AND :to_dt
+                GROUP BY bucket
+                ORDER BY bucket
+            """)
+
+            rows = db.execute(sql, {
+                "bucket":   f"{bucket_minutes} minutes",
+                "asset_id": asset_id,
+                "from_dt":  from_dt,
+                "to_dt":    to_dt
+            }).fetchall()
+
+            if not rows:
+                raise HTTPException(status_code=404, detail=f"No state of charge records found for asset {asset_id}")
+
+            return {
+                "asset_id":           asset.id,
+                "asset_name":         asset.name,
+                "eic_code":           asset.eic_code,
+                "asset_type":         asset.asset_type.value,
+                "max_capacity_mwh":   asset.max_capacity_mwh,
+                "record_count":       len(rows),
+                "resolution_minutes": bucket_minutes,
+                "downsampled":        True,
+                "from_ts":            from_dt.isoformat(),
+                "to_ts":              to_dt.isoformat(),
+                "records": [
+                    {
+                        "timestamp":           row.bucket.isoformat(),
+                        "energy_mwh":          row.energy_mwh,
+                        "power_mw":            row.power_mw,
+                        "reactive_power_mvar": row.reactive_power_mvar,
+                        "power_factor":        row.power_factor,
+                        "voltage":             row.voltage,
+                        "current_amps":        row.current_amps,
+                        "temperature_celsius": row.temperature_celsius,
+                    }
+                    for row in rows
+                ]
+            }
 
     else:
         raise HTTPException(status_code=400, detail="mode must be S (summary) or D (detail)")
+
 
 @app.post("/llm/ask")
 def ask_llm(question: str):
@@ -254,4 +310,3 @@ def ask_llm(question: str):
         ask_grid_question_stream(question),
         media_type="text/plain"
     )
-
