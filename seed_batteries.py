@@ -127,17 +127,6 @@ wind_assets = [
 
 all_assets = batteries + solar_assets + wind_assets
 
-OFFLINE_EIC = {
-    "17W-TM2XL-003---X", "17W-FLGSP-003---X", "17W-SGPT2-003---X",
-    "17W-BYDMC-003---X", "17W-WGSQ1-003---X", "17W-GERES-003---X",
-    "17W-CATLC-003---X", "17W-STATH-003---X", "17W-HEGG2-003---X",
-    "17W-PWST7-003---X", "17W-SPVAQ-003---X", "17W-EWPNC-003---X",
-    "17W-EWPHF-003---X",
-}
-
-def is_offline(asset: Asset) -> bool:
-    return asset.eic_code in OFFLINE_EIC
-
 
 # ── 3. StateOfCharge ──────────────────────────────────────────────────────────
 
@@ -148,72 +137,29 @@ def make_soc_records(asset: Asset) -> list:
     interval = 10
     steps = total_minutes // interval
 
-    offline = is_offline(asset)
-
     for i in range(steps):
         ts = now - timedelta(minutes=total_minutes - i * interval)
         hour = ts.hour
 
-        if offline:
-            records.append(StateOfCharge(
-                asset_id=asset.id,
-                timestamp=ts,
-                asset_status=AssetStatus.UNREACHABLE,
-                operational_mode=GridConnectionStatus.FAULT,
-                energy_mwh=round(asset.max_capacity_mwh * 0.6, 4),
-                power_mw=0.0,
-                reactive_power_mvar=0.0,
-                power_factor=1.0,
-                voltage=None,
-                current_amps=None,
-                temperature_celsius=None,
-            ))
-            continue
-
         if asset.asset_type == AssetType.BATTERY:
-            # Energy follows a sinusoidal daily cycle — high after overnight charge,
-            # low after evening discharge, never below 20% or above 95%
-            # Peak energy at 07:00, trough at 21:00
-            phase = (hour - 7) / 24  # 0 at 07:00
+            phase = (hour - 7) / 24
             base_fraction = 0.575 + 0.375 * math.cos(2 * math.pi * phase)
-            # Add per-asset and per-day noise for variety
-            day_seed = (asset.id * 100 + i // 144) % 97
             noise = (random.random() - 0.5) * 0.08
             energy_fraction = clamp(base_fraction + noise, 0.20, 0.95)
             energy = round(energy_fraction * asset.max_capacity_mwh, 4)
 
-            # Power follows the same logic — positive (charging) overnight,
-            # negative (discharging) during peaks, near zero midday and late evening
             if 0 <= hour < 7:
-                # Overnight charging
-                power_mw = round(random.uniform(
-                    asset.max_charge_rate_mw * 0.5,
-                    asset.max_charge_rate_mw * 0.95), 4)
+                power_mw = round(random.uniform(asset.max_charge_rate_mw * 0.5, asset.max_charge_rate_mw * 0.95), 4)
             elif 7 <= hour < 10:
-                # Morning peak discharge
-                power_mw = round(random.uniform(
-                    asset.max_discharge_rate_mw * 0.5,
-                    asset.max_discharge_rate_mw * 0.95), 4) * -1
+                power_mw = round(random.uniform(asset.max_discharge_rate_mw * 0.5, asset.max_discharge_rate_mw * 0.95), 4) * -1
             elif 10 <= hour < 14:
-                # Midday solar surplus — light charging
-                power_mw = round(random.uniform(
-                    asset.max_charge_rate_mw * 0.2,
-                    asset.max_charge_rate_mw * 0.6), 4)
+                power_mw = round(random.uniform(asset.max_charge_rate_mw * 0.2, asset.max_charge_rate_mw * 0.6), 4)
             elif 14 <= hour < 16:
-                # Early afternoon — light discharge
-                power_mw = round(random.uniform(
-                    asset.max_discharge_rate_mw * 0.1,
-                    asset.max_discharge_rate_mw * 0.4), 4) * -1
+                power_mw = round(random.uniform(asset.max_discharge_rate_mw * 0.1, asset.max_discharge_rate_mw * 0.4), 4) * -1
             elif 16 <= hour < 21:
-                # Evening peak discharge
-                power_mw = round(random.uniform(
-                    asset.max_discharge_rate_mw * 0.6,
-                    asset.max_discharge_rate_mw), 4) * -1
+                power_mw = round(random.uniform(asset.max_discharge_rate_mw * 0.6, asset.max_discharge_rate_mw), 4) * -1
             else:
-                # Late evening — light charge
-                power_mw = round(random.uniform(
-                    asset.max_charge_rate_mw * 0.1,
-                    asset.max_charge_rate_mw * 0.4), 4)
+                power_mw = round(random.uniform(asset.max_charge_rate_mw * 0.1, asset.max_charge_rate_mw * 0.4), 4)
 
         elif asset.asset_type == AssetType.SOLAR:
             day = i // 144
@@ -233,25 +179,39 @@ def make_soc_records(asset: Asset) -> list:
         reactive_power_mvar = round(random.uniform(-mvar_cap * 0.3, mvar_cap * 0.3), 4)
         pf = power_factor_from_pq(abs(power_mw), abs(reactive_power_mvar))
 
-        if abs(power_mw) < 0.01:
-            mode = GridConnectionStatus.HOLDING
+        # 1-in-100 chance of fault on any record
+        if random.randint(1, 100) == 1:
+            mode         = GridConnectionStatus.FAULT
+            power_mw     = 0.0
+            asset_status = AssetStatus.UNREACHABLE
         else:
-            mode = GridConnectionStatus.ACTIVE
+            if abs(power_mw) < 0.01:
+                mode = GridConnectionStatus.HOLDING
+            else:
+                mode = GridConnectionStatus.ACTIVE
+            if asset.asset_type in (AssetType.SOLAR, AssetType.WIND):
+                if random.random() < 0.03:
+                    mode     = GridConnectionStatus.CURTAILED
+                    power_mw = round(power_mw * random.uniform(0.1, 0.5), 4)
+            asset_status = AssetStatus.COMMUNICATING
 
-        if asset.asset_type in (AssetType.SOLAR, AssetType.WIND):
-            if random.random() < 0.03:
-                mode = GridConnectionStatus.CURTAILED
-                power_mw = round(power_mw * random.uniform(0.1, 0.5), 4)
+        # Temperature — ambient drift + load correlation + noise (batteries only)
+        if asset.asset_type == AssetType.BATTERY:
+            load_ratio  = abs(power_mw) / asset.max_discharge_rate_mw if asset.max_discharge_rate_mw > 0 else 0
+            base_temp   = 22.0 + 6.0 * math.sin(i * math.pi / (6 * 144))
+            temp_celsius = round(base_temp + load_ratio * 12.0 + random.uniform(-1.5, 1.5), 1)
+        else:
+            temp_celsius = None
 
         records.append(StateOfCharge(
             asset_id=asset.id,
             timestamp=ts,
-            asset_status=AssetStatus.COMMUNICATING,
+            asset_status=asset_status,
             operational_mode=mode,
             energy_mwh=energy if asset.asset_type == AssetType.BATTERY else 0.0,
             voltage=round(random.uniform(1380.0, 1420.0), 1) if asset.asset_type == AssetType.BATTERY else None,
             current_amps=round(power_mw * 1000 / 1400, 2) if asset.asset_type == AssetType.BATTERY else None,
-            temperature_celsius=round(22.0 + 6.0 * math.sin(i * math.pi / (6 * 144)), 1) if asset.asset_type == AssetType.BATTERY else None,
+            temperature_celsius=temp_celsius,
             power_mw=power_mw,
             reactive_power_mvar=reactive_power_mvar,
             power_factor=pf,
@@ -359,8 +319,7 @@ def seed():
         print("Building dispatch_command records...")
         dispatch_records = []
         for asset in all_assets:
-            if not is_offline(asset):
-                dispatch_records.extend(make_dispatch_commands(asset))
+            dispatch_records.extend(make_dispatch_commands(asset))
         db.add_all(dispatch_records)
         db.flush()
         print(f"✅ {len(dispatch_records)} dispatch_command records")

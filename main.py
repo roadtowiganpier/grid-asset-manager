@@ -11,7 +11,7 @@ from typing import Optional
 from datetime import datetime, timedelta
 from math import ceil
 from database import engine, SessionLocal
-from models import Base, Asset, AssetType, StateOfCharge
+from models import Base, Asset, AssetType, StateOfCharge, GridConnectionStatus, AssetStatus
 from llm_service import ask_grid_question_stream
 from telemetry_simulator import run as run_simulator
 
@@ -60,8 +60,10 @@ class AssetCreate(BaseModel):
 
 class TelemetryCreate(BaseModel):
     timestamp: datetime
-    energy_mwh: float                               # required — not nullable in StateOfCharge
+    energy_mwh: float
     power_mw: float
+    operational_mode: Optional[GridConnectionStatus] = None
+    asset_status: Optional[AssetStatus] = None
     reactive_power_mvar: Optional[float] = None
     power_factor: Optional[float] = None
     voltage: Optional[float] = None
@@ -120,7 +122,6 @@ def add_telemetry(asset_id: int, payload: TelemetryCreate, db: Session = Depends
 @app.get("/assetslist")
 def get_assets(db: Session = Depends(get_db)):
 
-    # Subquery — most recent state_of_charge timestamp per asset
     latest_soc = (
         db.query(
             StateOfCharge.asset_id,
@@ -130,7 +131,6 @@ def get_assets(db: Session = Depends(get_db)):
         .subquery()
     )
 
-    # Join assets → latest state_of_charge row
     results = (
         db.query(Asset, StateOfCharge)
         .join(latest_soc, Asset.id == latest_soc.c.asset_id)
@@ -150,7 +150,6 @@ def get_assets(db: Session = Depends(get_db)):
             "max_discharge_rate_mw":        asset.max_discharge_rate_mw,
             "reactive_power_capacity_mvar": asset.reactive_power_capacity_mvar,
             "efficiency":                   asset.efficiency,
-            # Live data from latest StateOfCharge
             "soc_id":                       soc.id,
             "operational_mode":             soc.operational_mode.value if soc.operational_mode else None,
             "asset_status":                 soc.asset_status.value if soc.asset_status else None,
@@ -167,7 +166,6 @@ def get_assets(db: Session = Depends(get_db)):
 @app.get("/assets/summary")
 def get_asset_summary(db: Session = Depends(get_db)):
 
-    # Subquery — most recent state_of_charge timestamp per asset
     latest_soc = (
         db.query(
             StateOfCharge.asset_id,
@@ -177,7 +175,6 @@ def get_asset_summary(db: Session = Depends(get_db)):
         .subquery()
     )
 
-    # Join assets → latest state_of_charge row
     results = (
         db.query(Asset, StateOfCharge)
         .join(latest_soc, Asset.id == latest_soc.c.asset_id)
@@ -186,12 +183,10 @@ def get_asset_summary(db: Session = Depends(get_db)):
         .all()
     )
 
-    # Aggregate in Python across the latest rows
     total_power_mw      = sum(soc.power_mw or 0.0 for _, soc in results)
     total_energy_mwh    = sum(soc.energy_mwh or 0.0 for _, soc in results)
     total_reactive_mvar = sum(soc.reactive_power_mvar or 0.0 for _, soc in results)
 
-    # Break down by asset type
     by_type = {}
     for asset, soc in results:
         t = asset.asset_type.value
@@ -268,15 +263,15 @@ def get_asset_soc(
         }
 
     elif mode.upper() == "D":
-        if not from_ts:
-            from_dt = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=2)
-        else:
-            from_dt = datetime.fromisoformat(from_ts)
-
         if not to_ts:
             to_dt = datetime.utcnow()
         else:
             to_dt = datetime.fromisoformat(to_ts)
+            
+        if not from_ts:
+            from_dt = to_dt - timedelta(days=2)
+        else:
+            from_dt = datetime.fromisoformat(from_ts)
 
         delta_days     = (to_dt - from_dt).days
         bucket_minutes = ceil((delta_days * 24 * 60) / limit)
@@ -287,7 +282,7 @@ def get_asset_soc(
                 .filter(StateOfCharge.asset_id == asset_id)
                 .filter(StateOfCharge.timestamp >= from_dt)
                 .filter(StateOfCharge.timestamp <= to_dt)
-                .order_by(StateOfCharge.timestamp.asc())
+                .order_by(StateOfCharge.timestamp.desc())
                 .limit(limit)
                 .all()
             )
