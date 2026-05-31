@@ -299,8 +299,8 @@ def get_asset_soc(
                 "record_count":       len(records),
                 "resolution_minutes": 10,
                 "downsampled":        False,
-                "from_ts":            records[0].timestamp.isoformat(),
-                "to_ts":              records[-1].timestamp.isoformat(),
+                "from_ts": from_dt.isoformat(),
+                "to_ts":   to_dt.isoformat(),
                 "records": [
                     {
                         "timestamp":           r.timestamp.isoformat(),
