@@ -16,6 +16,21 @@ from models import Base, Asset, AssetType, StateOfCharge, GridConnectionStatus, 
 from llm_service import ask_grid_question_stream
 from telemetry_simulator import run as run_simulator
 
+RADA_BANNER = """
+\033[36m╔═══════════════════════════════════════════╗
+║  ▓▓▓▓   ▓▓▓  ▓▓▓▓   ▓▓▓                    ║
+║  ▓   ▓ ▓   ▓ ▓   ▓ ▓   ▓                   ║
+║  ▓▓▓▓  ▓▓▓▓▓ ▓   ▓ ▓▓▓▓▓                   ║
+║  ▓  ▓  ▓   ▓ ▓   ▓ ▓   ▓                   ║
+║  ▓   ▓ ▓   ▓ ▓▓▓▓  ▓   ▓                   ║
+╚═══════════════════════════════════════════╝\033[0m
+\033[33m   [ R E N E W A B L E   A S S E T S ]
+   [ D A T A   A N A L Y T I C S    ]\033[0m
+\033[32m   >> system online _\033[0m
+"""
+
+print(RADA_BANNER)
+
 # --- API Key authentication ---
 API_KEY = os.getenv("API_KEY")
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
