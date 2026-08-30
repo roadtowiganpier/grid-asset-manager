@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Grid Asset Manager API",
     lifespan=lifespan,
-    docs_url="/docs" if os.getenv("ENVIRONMENT") == "development" else None,
+    docs_url="/docs" if os.getenv("ENVIRONMENT") in ("development", "staging") else None,
     redoc_url=None,
 )
 
