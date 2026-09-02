@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timedelta
 from math import ceil
@@ -96,6 +96,9 @@ class AssetCreate(BaseModel):
     max_discharge_rate_mw: float
     reactive_power_capacity_mvar: Optional[float] = None
     efficiency: Optional[float] = None
+    latitude: Optional[float] = Field(None, ge=-90, le=90)
+    longitude: Optional[float] = Field(None, ge=-180, le=180)
+    edge_id: Optional[str] = None
 
 class TelemetryCreate(BaseModel):
     timestamp: datetime
@@ -189,6 +192,9 @@ def get_assets(db: Session = Depends(get_db)):
             "max_discharge_rate_mw":        asset.max_discharge_rate_mw,
             "reactive_power_capacity_mvar": asset.reactive_power_capacity_mvar,
             "efficiency":                   asset.efficiency,
+            "latitude":                     asset.latitude,
+            "longitude":                    asset.longitude,
+            "edge_id":                      asset.edge_id,
             "soc_id":                       soc.id,
             "operational_mode":             soc.operational_mode.value if soc.operational_mode else None,
             "asset_status":                 soc.asset_status.value if soc.asset_status else None,
@@ -287,6 +293,9 @@ def get_asset_soc(
             "eic_code":         asset.eic_code,
             "asset_type":       asset.asset_type.value,
             "max_capacity_mwh": asset.max_capacity_mwh,
+            "latitude":         asset.latitude,
+            "longitude":        asset.longitude,
+            "edge_id":          asset.edge_id,
             "record": {
                 "timestamp":           record.timestamp.isoformat(),
                 "operational_mode":    record.operational_mode.value if record.operational_mode else None,
@@ -335,6 +344,9 @@ def get_asset_soc(
                 "eic_code":           asset.eic_code,
                 "asset_type":         asset.asset_type.value,
                 "max_capacity_mwh":   asset.max_capacity_mwh,
+                "latitude":           asset.latitude,
+                "longitude":          asset.longitude,
+                "edge_id":            asset.edge_id,
                 "record_count":       len(records),
                 "resolution_minutes": 10,
                 "downsampled":        False,
@@ -391,6 +403,9 @@ def get_asset_soc(
                 "eic_code":           asset.eic_code,
                 "asset_type":         asset.asset_type.value,
                 "max_capacity_mwh":   asset.max_capacity_mwh,
+                "latitude":           asset.latitude,
+                "longitude":          asset.longitude,
+                "edge_id":            asset.edge_id,
                 "record_count":       len(rows),
                 "resolution_minutes": bucket_minutes,
                 "downsampled":        True,
