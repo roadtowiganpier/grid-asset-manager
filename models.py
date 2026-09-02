@@ -35,6 +35,9 @@ class Asset(Base):
     reactive_power_capacity_mvar = Column(Float, nullable=True)   # Nameplate MVAR rating
     max_capacity_mwh = Column(Float, nullable=False) 
     efficiency = Column(Float, default=0.95)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    edge_id = Column(String, nullable=True)  # OpenEMS edge identifier, e.g. "edge0"
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
