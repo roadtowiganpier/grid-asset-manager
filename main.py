@@ -1,3 +1,12 @@
+"""
+main.py
+
+FastAPI application entrypoint. Defines the REST API for managing grid
+assets (batteries, solar, wind farms), their telemetry/state-of-charge
+history, and the LLM-based grid Q&A endpoint. Protected by a shared
+X-API-Key header (see verify_api_key).
+"""
+
 import os
 import threading
 from contextlib import asynccontextmanager

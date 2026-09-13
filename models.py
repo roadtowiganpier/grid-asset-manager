@@ -1,3 +1,11 @@
+"""
+models.py
+
+SQLAlchemy ORM models — the database schema. Defines Asset (batteries,
+solar and wind farms), their StateOfCharge/telemetry history, grid-wide
+GridSignal readings, and DispatchCommand records sent to assets.
+"""
+
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
